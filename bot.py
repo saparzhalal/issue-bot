@@ -5,8 +5,6 @@ from database import init_db
 from handlers import start, button_handler, handle_message, handle_photo, stats, issue_detail
 
 
-# Initialize database
-init_db()
 
 # Create Telegram bot app
 app = ApplicationBuilder().token(BOT_TOKEN).build()
@@ -24,5 +22,10 @@ app.add_handler(CallbackQueryHandler(button_handler))
 app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
 app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-print("Bot is running...")
-app.run_polling()
+def main():
+    init_db()
+    print("Bot is running...")
+    app.run_polling()
+
+if __name__ == "__main__":
+    main()
