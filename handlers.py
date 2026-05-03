@@ -169,17 +169,23 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         status = status_map[query.data]
         issues = get_issues_by_status(status)
+        # sort newest first by created_at (index 9)
+        try:
+            issues = sorted(issues, key=lambda x: x[9], reverse=True)
+        except Exception:
+            pass
+        issues = issues[:20]
 
         if not issues:
             await query.message.reply_text(f"No {status} issues.")
             return
 
         buttons = []
-        for issue in issues[:20]:
-            issue_id, item, location, *_ = issue
+        for issue in issues:
+            issue_id, *_ = issue
             buttons.append([
                 InlineKeyboardButton(
-                    f"#{issue_id} | {item} | {location}",
+                    f"#{issue_id}",
                     callback_data=f"view_issue_{issue_id}"
                 )
             ])
