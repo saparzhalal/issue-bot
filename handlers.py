@@ -611,7 +611,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "👷 Assigned to: Not assigned yet\n"
         f"👥 Team: {team_name}\n"
         f"👤 Reported by: {reported_by}\n"
-        "📌 Status: New"
+        "📌 Status: {status_history}\n"
     )
 
     keyboard = InlineKeyboardMarkup([
