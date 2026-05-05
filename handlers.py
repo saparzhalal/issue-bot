@@ -93,7 +93,7 @@ def build_full_issue_caption(issue):
         f"📝 Description: {description}\n"
         f"👷 Assigned to: {assigned_to}\n"
         f"👥 Team: {team}\n"
-        f"📌 Current Status: {status}\n"
+        f"📌 Status: {status}\n"
         f"👤 Reported by: {reported_by}\n"
         f"🕒 Created at: {created_at}\n\n"
         f"👷 Status History:{status_history}"
@@ -611,7 +611,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "👷 Assigned to: Not assigned yet\n"
         f"👥 Team: {team_name}\n"
         f"👤 Reported by: {reported_by}\n"
-        "📌 Status: {status_history}\n"
+        "📌 Status: New\n"
     )
 
     keyboard = InlineKeyboardMarkup([
