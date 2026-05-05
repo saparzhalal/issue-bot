@@ -402,7 +402,11 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 reply_markup=query.message.reply_markup
             )
         except Exception as e:
-            print(f"Edit skipped: {e}")
+            print(f"❌ Caption edit failed: {e}")
+            await context.bot.send_message(
+                chat_id=query.message.chat.id,
+                text=f"⚠️ Status updated to {status_text}, but message could not be edited."
+            )
 
         await query.answer(f"Issue #{issue_id} updated to {status_text} by {changed_by}")
         return
@@ -533,7 +537,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 reply_markup=reject_data.get("reply_markup")
             )
         except Exception as e:
-            print(f"Edit skipped: {e}")
+            print(f"❌ Caption edit failed (rejection): {e}")
+            await context.bot.send_message(
+                chat_id=reject_data["chat_id"],
+                text="⚠️ Issue rejected successfully, but message could not be updated."
+            )
 
         await update.message.reply_text(
             f"✅ Issue #{issue_id} rejected by {changed_by}.\nReason: {reason}"
