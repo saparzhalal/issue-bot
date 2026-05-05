@@ -182,10 +182,15 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         buttons = []
         for issue in issues:
-            issue_id, *_ = issue
+            try:
+                issue_id = int(issue[0])
+            except Exception:
+                print("❌ BAD ISSUE DATA:", issue)
+                continue
+
             buttons.append([
                 InlineKeyboardButton(
-                    f"#{issue_id}",
+                    text=f"#{issue_id}",
                     callback_data=f"view_issue_{issue_id}"
                 )
             ])
