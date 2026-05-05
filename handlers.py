@@ -226,7 +226,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         photo_file_id = issue[3]
 
         await context.bot.send_photo(
-            chat_id=query.message.chat_id,
+            chat_id=query.message.chat.id,
             photo=photo_file_id,
             caption=caption
         )
