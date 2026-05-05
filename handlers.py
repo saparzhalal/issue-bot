@@ -216,7 +216,10 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if query.data.startswith("view_issue_"):
         issue_id = int(query.data.replace("view_issue_", ""))
+        print("CLICKED ID:", issue_id)
+
         issue = get_issue_by_id(issue_id)
+        print("FOUND ISSUE:", issue)
 
         if issue is None:
             await query.message.reply_text(f"Issue #{issue_id} was not found.")
@@ -225,11 +228,16 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         caption = build_full_issue_caption(issue)
         photo_file_id = issue[3]
 
-        await context.bot.send_photo(
-            chat_id=query.message.chat.id,
-            photo=photo_file_id,
-            caption=caption
-        )
+        try:
+            await context.bot.send_photo(
+                chat_id=query.message.chat.id,
+                photo=photo_file_id,
+                caption=caption
+            )
+        except Exception as e:
+            print("PHOTO ERROR:", e)
+            await query.message.reply_text(caption)
+
         return
 
     if query.data == "report_problem":
