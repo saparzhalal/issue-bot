@@ -183,7 +183,15 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         buttons = []
         for issue in issues:
             try:
-                issue_id = issue[0]  # don't force int
+                # handle both tuple and dict from DB
+                if isinstance(issue, dict):
+                    issue_id = issue.get("id")
+                else:
+                    issue_id = issue[0]
+
+                if not issue_id:
+                    raise ValueError("Missing ID")
+
             except Exception:
                 print("❌ BAD ISSUE DATA:", issue)
                 continue
