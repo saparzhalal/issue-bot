@@ -183,7 +183,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         buttons = []
         for issue in issues:
             try:
-                issue_id = int(issue[0])
+                issue_id = issue[0]  # don't force int
             except Exception:
                 print("❌ BAD ISSUE DATA:", issue)
                 continue
@@ -194,6 +194,11 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     callback_data=f"view_issue_{issue_id}"
                 )
             ])
+
+        # if after loop still empty, show debug message
+        if not buttons:
+            await query.message.reply_text(f"⚠️ No valid issues found for {status}. Check database data.")
+            return
 
         await query.message.reply_text(
             f"📋 {status} Issues:\n\nChoose an issue below to view full details.",
