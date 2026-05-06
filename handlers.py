@@ -3,6 +3,7 @@ from telegram.ext import ContextTypes
 
 from ai_helper import get_description_keyboard
 from config import ICT_GROUP_ID, MAINTENANCE_GROUP_ID
+
 from database import (
     save_issue,
     get_issue_by_id,
@@ -10,6 +11,12 @@ from database import (
     update_issue_status,
     get_status_history,
     get_issues_by_status,
+)
+
+from utils import (
+    build_full_issue_caption,
+    update_caption_field,
+    notify_reporter,
 )
 
 
@@ -92,27 +99,6 @@ def get_stats_message() -> str:
     )
 
 
-def build_full_issue_caption(issue: tuple) -> str:
-    (issue_id, item, location, photo_file_id, team,
-     status, reported_by, description, assigned_to,
-     created_at, reporter_user_id) = issue
-
-    description = description or "No description"
-    assigned_to = assigned_to or "Not assigned yet"
-    status_history = get_status_history(issue_id)
-
-    return (
-        f"📄 Issue #{issue_id}\n\n"
-        f"🔧 Item: {item}\n"
-        f"📍 Location: {location}\n"
-        f"📝 Description: {description}\n"
-        f"👷 Assigned to: {assigned_to}\n"
-        f"👥 Team: {team}\n"
-        f"📌 Status: {status}\n"
-        f"👤 Reported by: {reported_by}\n"
-        f"🕒 Created at: {created_at}\n\n"
-        f"📜 Status History:\n{status_history}"
-    )
 
 
 def build_group_caption(issue_id, item, location, description, team, reported_by) -> str:
@@ -133,36 +119,8 @@ def build_group_caption(issue_id, item, location, description, team, reported_by
     )
 
 
-def update_caption_field(caption: str, updates: dict[str, str]) -> str:
-    lines = caption.split("\n")
-    new_lines = []
-    found = {key: False for key in updates}
-
-    for line in lines:
-        replaced = False
-        for prefix, value in updates.items():
-            if line.startswith(prefix):
-                new_lines.append(f"{prefix} {value}")
-                found[prefix] = True
-                replaced = True
-                break
-        if not replaced:
-            new_lines.append(line)
-
-    for prefix, value in updates.items():
-        if not found[prefix]:
-            new_lines.append(f"{prefix} {value}")
-
-    return "\n".join(new_lines)
 
 
-async def notify_reporter(context, reporter_user_id, text: str) -> None:
-    if not reporter_user_id:
-        return
-    try:
-        await context.bot.send_message(chat_id=reporter_user_id, text=text)
-    except Exception as e:
-        print(f"[NOTIFY] Could not notify user {reporter_user_id}: {e}")
 
 
 # ─── Command Handlers ─────────────────────────────────────────────────────────
