@@ -3,7 +3,6 @@ from telegram.ext import ContextTypes
 
 from ai_helper import get_description_keyboard
 from config import ICT_GROUP_ID, MAINTENANCE_GROUP_ID
-
 from database import (
     save_issue,
     get_issue_by_id,
@@ -11,12 +10,6 @@ from database import (
     update_issue_status,
     get_status_history,
     get_issues_by_status,
-)
-
-from utils import (
-    build_full_issue_caption,
-    update_caption_field,
-    notify_reporter,
 )
 
 
@@ -34,6 +27,7 @@ MAINTENANCE_KEYWORDS = [
     "lock", "handle", "water", "electric", "plug", "socket",
 ]
 
+# Maps callback_data → display status string
 STATUS_MAP = {
     "show_new":      "New",
     "show_progress": "In Progress",
@@ -41,12 +35,14 @@ STATUS_MAP = {
     "show_rejected": "Rejected",
 }
 
+# Maps status_<key>_<id> callback key → display status string
 STATUS_TEXT_MAP = {
     "progress": "In Progress",
     "fixed":    "Fixed",
     "rejected": "Rejected",
 }
 
+# Notification messages sent to the reporter
 NOTIFY_TEXT = {
     "In Progress": "🟡 Your request is now IN PROGRESS.",
     "Fixed":       "✅ Your request has been FIXED.",
@@ -57,6 +53,7 @@ NOTIFY_TEXT = {
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 
 def get_team_for_item(item: str) -> tuple[str, int]:
+    """Return (team_name, group_id) based on the item's keywords."""
     item_lower = item.lower()
     for keyword in ICT_KEYWORDS:
         if keyword in item_lower:
@@ -75,10 +72,11 @@ def get_location_keyboard() -> InlineKeyboardMarkup:
 
 
 def get_issue_action_keyboard(issue_id: int) -> InlineKeyboardMarkup:
+    """Central keyboard builder for issue action buttons — always reconstructed from ID."""
     return InlineKeyboardMarkup([
         [
             InlineKeyboardButton("🔄 In Progress", callback_data=f"status_progress_{issue_id}"),
-            InlineKeyboardButton("✅ Fixed",        callback_data=f"status_fixed_{issue_id}"),
+            InlineKeyboardButton("✅ Fixed",       callback_data=f"status_fixed_{issue_id}"),
         ],
         [InlineKeyboardButton("❌ Rejected",          callback_data=f"status_rejected_{issue_id}")],
         [InlineKeyboardButton("👷 Assign Technician", callback_data=f"assign_{issue_id}")],
@@ -99,28 +97,66 @@ def get_stats_message() -> str:
     )
 
 
+def build_full_issue_caption(issue: tuple) -> str:
+    (issue_id, item, location, photo_file_id, team,
+     status, reported_by, description, assigned_to,
+     created_at, reporter_user_id) = issue
 
+    description = description or "No description"
+    assigned_to = assigned_to or "Not assigned yet"
+    status_history = get_status_history(issue_id)
 
-def build_group_caption(issue_id, item, location, description, team, reported_by) -> str:
-    """
-    Short caption for group messages — well under Telegram's 1024-char
-    photo caption limit so status/assign edits always succeed.
-    """
     return (
-        f"🆕 Issue #{issue_id}\n"
+        f"📄 Issue #{issue_id}\n\n"
         f"🔧 Item: {item}\n"
         f"📍 Location: {location}\n"
         f"📝 Description: {description}\n"
+        f"👷 Assigned to: {assigned_to}\n"
         f"👥 Team: {team}\n"
+        f"📌 Status: {status}\n"
         f"👤 Reported by: {reported_by}\n"
-        f"📌 Status: New\n"
-        f"👷 Assigned to: Not assigned yet\n"
-        f"👷 Last updated by: —\n"
+        f"🕒 Created at: {created_at}\n\n"
+        f"📜 Status History:\n{status_history}"
     )
 
 
+def update_caption_field(caption: str, updates: dict[str, str]) -> str:
+    """
+    Replace specific labeled lines in a caption string.
+    updates = { "📌 Status:": "Fixed", "👷 Last updated by:": "Ali" }
+    Lines not found are appended at the end.
+    """
+    lines = caption.split("\n")
+    new_lines = []
+    found = {key: False for key in updates}
+
+    for line in lines:
+        replaced = False
+        for prefix, value in updates.items():
+            if line.startswith(prefix):
+                new_lines.append(f"{prefix} {value}")
+                found[prefix] = True
+                replaced = True
+                break
+        if not replaced:
+            new_lines.append(line)
+
+    # Append any fields that weren't found in the existing caption
+    for prefix, value in updates.items():
+        if not found[prefix]:
+            new_lines.append(f"{prefix} {value}")
+
+    return "\n".join(new_lines)
 
 
+async def notify_reporter(context, reporter_user_id: int | None, text: str) -> None:
+    """Silently send a status notification to the original reporter."""
+    if not reporter_user_id:
+        return
+    try:
+        await context.bot.send_message(chat_id=reporter_user_id, text=text)
+    except Exception as e:
+        print(f"[NOTIFY] Could not notify user {reporter_user_id}: {e}")
 
 
 # ─── Command Handlers ─────────────────────────────────────────────────────────
@@ -176,10 +212,11 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     await query.answer()
     data = query.data
 
-    # ── Show issues by status ───────────────────────────────────────────────
+    # ── Show issues by status list ──────────────────────────────────────────
     if data in STATUS_MAP:
         status = STATUS_MAP[data]
         issues = get_issues_by_status(status)
+
         try:
             issues = sorted(issues, key=lambda x: x[9], reverse=True)[:20]
         except Exception:
@@ -202,12 +239,12 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             return
 
         await query.message.reply_text(
-            f"📋 {status} Issues — tap one to view:",
+            f"📋 {status} Issues — tap one to view details:",
             reply_markup=InlineKeyboardMarkup(buttons),
         )
         return
 
-    # ── View single issue ───────────────────────────────────────────────────
+    # ── View single issue detail ────────────────────────────────────────────
     if data.startswith("view_issue_"):
         issue_id = int(data.replace("view_issue_", ""))
         issue = get_issue_by_id(issue_id)
@@ -244,8 +281,11 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     # ── Select item ─────────────────────────────────────────────────────────
     if data.startswith("item_"):
         ITEM_MAP = {
-            "item_tv": "TV", "item_chair": "Chair", "item_door": "Door",
-            "item_computer": "Computer", "item_light": "Light",
+            "item_tv":       "TV",
+            "item_chair":    "Chair",
+            "item_door":     "Door",
+            "item_computer": "Computer",
+            "item_light":    "Light",
         }
         if data == "item_other":
             context.user_data["step"] = "waiting_item"
@@ -260,7 +300,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             )
         return
 
-    # ── Select floor ────────────────────────────────────────────────────────
+    # ── Select floor / location ─────────────────────────────────────────────
     if data.startswith("loc_"):
         if not context.user_data.get("item"):
             await query.message.reply_text("⚠️ Session expired. Please type /start.")
@@ -291,11 +331,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return
 
     # ── Assign technician ───────────────────────────────────────────────────
-    # FIX: prompt goes to admin's PRIVATE chat, not the group
     if data.startswith("assign_"):
         issue_id = int(data.replace("assign_", ""))
-        admin_id = query.from_user.id
-
         context.user_data.update({
             "step":       "waiting_assignment_name",
             "issue_id":   issue_id,
@@ -303,23 +340,12 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             "message_id": query.message.message_id,
             "caption":    query.message.caption or "",
         })
-
-        try:
-            await context.bot.send_message(
-                chat_id=admin_id,
-                text=(
-                    f"👷 Type the technician name for Issue #{issue_id}.\n"
-                    f"(Reply here in private, not in the group)"
-                ),
-            )
-        except Exception:
-            await query.message.reply_text(
-                "⚠️ Please open a private chat with this bot first, then try again."
-            )
+        await query.message.reply_text(f"👷 Type the technician name for Issue #{issue_id}.")
         return
 
     # ── Update status ───────────────────────────────────────────────────────
     if data.startswith("status_"):
+        # callback format: status_<key>_<issue_id>
         parts = data.split("_")
         if len(parts) < 3:
             await query.answer("Invalid status data.", show_alert=True)
@@ -337,9 +363,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             await query.answer("Unknown status.", show_alert=True)
             return
 
-        # FIX: rejection reason prompt goes to admin's PRIVATE chat
+        # Rejected requires a typed reason — defer to handle_message
         if status_text == "Rejected":
-            admin_id = query.from_user.id
             context.user_data.update({
                 "step":       "waiting_reject_reason",
                 "issue_id":   issue_id,
@@ -347,18 +372,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 "message_id": query.message.message_id,
                 "caption":    query.message.caption or "",
             })
-            try:
-                await context.bot.send_message(
-                    chat_id=admin_id,
-                    text=(
-                        f"❌ Type the rejection reason for Issue #{issue_id}.\n"
-                        f"(Reply here in private, not in the group)"
-                    ),
-                )
-            except Exception:
-                await query.message.reply_text(
-                    "⚠️ Please open a private chat with this bot first, then try again."
-                )
+            await query.message.reply_text(f"❌ Type the rejection reason for Issue #{issue_id}.")
             return
 
         changed_by = query.from_user.first_name
@@ -366,7 +380,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
         issue = get_issue_by_id(issue_id)
         if issue:
-            notify_msg = NOTIFY_TEXT.get(status_text, f"ℹ️ Status changed to {status_text}.")
+            notify_msg = NOTIFY_TEXT.get(status_text, f"ℹ️ Your request status changed to {status_text}.")
             await notify_reporter(context, issue[10], notify_msg)
 
         new_caption = update_caption_field(
@@ -383,10 +397,10 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 reply_markup=get_issue_action_keyboard(issue_id),
             )
         except Exception as e:
-            print(f"[STATUS CAPTION ERROR] {e}")
+            print(f"[STATUS CAPTION] {e}")
             await context.bot.send_message(
                 chat_id=query.message.chat.id,
-                text=f"⚠️ Status updated to '{status_text}' in DB but caption edit failed.\nError: {e}",
+                text=f"⚠️ Status updated to {status_text}, but the message could not be edited.",
             )
 
         await query.answer(f"Issue #{issue_id} → {status_text} by {changed_by}")
@@ -402,14 +416,17 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     text = update.message.text.strip()
     step = context.user_data.get("step")
 
+    # Start command (text alias)
     if text.lower() in {"/start", "start"}:
         await start(update, context)
         return
 
+    # Admin stats shortcut
     if text.lower() == "aliadmin":
         await stats(update, context)
         return
 
+    # Issue lookup by number or #number
     clean = text.lstrip("#")
     if clean.isdigit():
         issue_id = int(clean)
@@ -428,7 +445,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             await update.message.reply_text(build_full_issue_caption(issue))
         return
 
-    # ── Report flow ────────────────────────────────────────────────────────
+    # ── Report flow steps ──────────────────────────────────────────────────
 
     if step == "waiting_item":
         context.user_data.update({"item": text, "step": "waiting_location"})
@@ -440,7 +457,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     if step == "waiting_room":
         floor = context.user_data.get("floor", "")
-        context.user_data.update({"location": f"{floor} - {text}", "step": "waiting_description"})
+        context.user_data.update({
+            "location": f"{floor} - {text}",
+            "step": "waiting_description",
+        })
         await update.message.reply_text(
             "📝 What is the problem? Choose one or select Other.",
             reply_markup=get_description_keyboard(context.user_data["item"]),
@@ -461,14 +481,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return
 
     if step == "waiting_photo":
+        # User sent text instead of a photo
         await update.message.reply_text("📸 Please send a *photo*, not text.", parse_mode="Markdown")
         return
 
-    # ── Admin flow (runs in PRIVATE chat) ─────────────────────────────────
+    # ── Admin / technician flow steps ──────────────────────────────────────
 
     if step == "waiting_reject_reason":
-        issue_id   = context.user_data["issue_id"]
-        reason     = text
+        issue_id  = context.user_data["issue_id"]
+        reason    = text
         changed_by = update.effective_user.first_name
 
         update_issue_status(issue_id, "Rejected", changed_by, reason)
@@ -497,10 +518,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 reply_markup=get_issue_action_keyboard(issue_id),
             )
         except Exception as e:
-            print(f"[REJECT CAPTION ERROR] {e}")
+            print(f"[REJECT CAPTION] {e}")
             await context.bot.send_message(
                 chat_id=context.user_data["chat_id"],
-                text=f"⚠️ Issue #{issue_id} rejected but group caption could not be updated.\nError: {e}",
+                text="⚠️ Issue rejected, but the group message could not be updated.",
             )
 
         await update.message.reply_text(
@@ -526,12 +547,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 reply_markup=get_issue_action_keyboard(issue_id),
             )
         except Exception as e:
-            print(f"[ASSIGN CAPTION ERROR] {e}")
+            print(f"[ASSIGN CAPTION] {e}")
 
         await update.message.reply_text(f"✅ Issue #{issue_id} assigned to {text}.")
         context.user_data.clear()
         return
 
+    # Default fallback
     await update.message.reply_text("Please type /start to begin reporting an issue.")
 
 
@@ -544,9 +566,9 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         )
         return
 
-    data          = context.user_data
-    user_id       = update.effective_user.id
-    reported_by   = update.effective_user.first_name
+    data        = context.user_data
+    user_id     = update.effective_user.id
+    reported_by = update.effective_user.first_name
     photo_file_id = update.message.photo[-1].file_id
     description   = data.get("description", "No description")
 
@@ -562,14 +584,15 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         description=description,
     )
 
-    # FIX: use short caption so Telegram's 1024-char limit is never hit
-    caption = build_group_caption(
-        issue_id=issue_id,
-        item=data["item"],
-        location=data["location"],
-        description=description,
-        team=team_name,
-        reported_by=reported_by,
+    caption = (
+        f"🆕 Issue #{issue_id}\n\n"
+        f"🔧 Item: {data['item']}\n"
+        f"📍 Location: {data['location']}\n"
+        f"📝 Description: {description}\n"
+        f"👷 Assigned to: Not assigned yet\n"
+        f"👥 Team: {team_name}\n"
+        f"👤 Reported by: {reported_by}\n"
+        f"📌 Status: New\n"
     )
 
     try:
@@ -580,7 +603,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             reply_markup=get_issue_action_keyboard(issue_id),
         )
     except Exception as e:
-        print(f"[GROUP SEND ERROR] Failed to post Issue #{issue_id} to group {group_id}: {e}")
+        print(f"[GROUP SEND] Failed to post Issue #{issue_id} to group {group_id}: {e}")
 
     await update.message.reply_text(
         f"✅ Report submitted!\n\n"
