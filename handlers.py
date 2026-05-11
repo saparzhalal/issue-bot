@@ -1,15 +1,22 @@
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 
 from ai_helper import get_description_keyboard
 from config import ICT_GROUP_ID, MAINTENANCE_GROUP_ID
 from database import (
-    save_issue,
-    get_issue_by_id,
-    assign_issue,
-    update_issue_status,
-    get_status_history,
-    get_issues_by_status,
+    create_ticket,
+    get_ticket,
+    assign_ticket,
+    update_ticket_status,
+    get_ticket_history,
+    get_tickets_by_status,
+)
+from keyboards import (
+    main_menu_keyboard,
+    item_keyboard,
+    location_keyboard,
+    status_keyboard,
+    stats_keyboard,
 )
 
 
@@ -64,28 +71,13 @@ def get_team_for_item(item: str) -> tuple[str, int]:
     return "Maintenance Team", MAINTENANCE_GROUP_ID
 
 
-def get_location_keyboard() -> InlineKeyboardMarkup:
-    floors = ["1st Floor", "2nd Floor", "3rd Floor", "4th Floor", "5th Floor"]
-    buttons = [[InlineKeyboardButton(f, callback_data=f"loc_{f}")] for f in floors]
-    buttons.append([InlineKeyboardButton("📌 Other", callback_data="loc_other")])
-    return InlineKeyboardMarkup(buttons)
 
 
-def get_issue_action_keyboard(issue_id: int) -> InlineKeyboardMarkup:
-    """Central keyboard builder for issue action buttons — always reconstructed from ID."""
-    return InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("🔄 In Progress", callback_data=f"status_progress_{issue_id}"),
-            InlineKeyboardButton("✅ Fixed",       callback_data=f"status_fixed_{issue_id}"),
-        ],
-        [InlineKeyboardButton("❌ Rejected",          callback_data=f"status_rejected_{issue_id}")],
-        [InlineKeyboardButton("👷 Assign Technician", callback_data=f"assign_{issue_id}")],
-    ])
 
 
 def get_stats_message() -> str:
     statuses = ["New", "In Progress", "Fixed", "Rejected"]
-    counts = {s: len(get_issues_by_status(s)) for s in statuses}
+    counts = {s: len(get_tickets_by_status(s)) for s in statuses}
     total = sum(counts.values())
     return (
         "📊 Current Issue Report\n\n"
@@ -97,26 +89,33 @@ def get_stats_message() -> str:
     )
 
 
-def build_full_issue_caption(issue: tuple) -> str:
-    (issue_id, item, location, photo_file_id, team,
-     status, reported_by, description, assigned_to,
-     created_at, reporter_user_id) = issue
+def build_full_ticket_caption(ticket: dict) -> str:
+    status_history = get_ticket_history(ticket["id"])
 
-    description = description or "No description"
-    assigned_to = assigned_to or "Not assigned yet"
-    status_history = get_status_history(issue_id)
+    history_text = ""
+
+    if status_history:
+        for row in status_history:
+            history_text += (
+                f"\n- {row['new_status']} by {row['updated_by']}"
+            )
+
+            if row["notes"]:
+                history_text += f"\n  Notes: {row['notes']}"
+    else:
+        history_text = "\nNo updates yet."
 
     return (
-        f"📄 Issue #{issue_id}\n\n"
-        f"🔧 Item: {item}\n"
-        f"📍 Location: {location}\n"
-        f"📝 Description: {description}\n"
-        f"👷 Assigned to: {assigned_to}\n"
-        f"👥 Team: {team}\n"
-        f"📌 Status: {status}\n"
-        f"👤 Reported by: {reported_by}\n"
-        f"🕒 Created at: {created_at}\n\n"
-        f"📜 Status History:\n{status_history}"
+        f"📄 Ticket #{ticket['id']}\n\n"
+        f"🔧 Item: {ticket['item_name']}\n"
+        f"📍 Location: {ticket['location']}\n"
+        f"📝 Description: {ticket['issue_description']}\n"
+        f"👷 Assigned to: {ticket['assigned_to'] or 'Not assigned yet'}\n"
+        f"📌 Status: {ticket['status']}\n"
+        f"👤 Reported by: {ticket['requester_name']}\n"
+        f"🕒 Created at: {ticket['created_at']}\n"
+        f"🧾 Final Diagnosis: {ticket['final_diagnosis'] or 'Not added yet'}\n\n"
+        f"📜 Status History:{history_text}"
     )
 
 
@@ -164,22 +163,15 @@ async def notify_reporter(context, reporter_user_id: int | None, text: str) -> N
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     context.user_data.clear()
     await update.message.reply_text(
-        "👋 Welcome to Company Issue Reporter Bot\n\nClick below to report a problem.",
-        reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("🛠 Report Problem", callback_data="report_problem")]
-        ]),
+        "👋 Welcome to Company Issue Reporter Bot\n\nPlease click below to report an issue.",
+        reply_markup=main_menu_keyboard(),
     )
 
 
 async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(
         get_stats_message(),
-        reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("🆕 Show New",         callback_data="show_new")],
-            [InlineKeyboardButton("🔄 Show In Progress", callback_data="show_progress")],
-            [InlineKeyboardButton("✅ Show Fixed",        callback_data="show_fixed")],
-            [InlineKeyboardButton("❌ Show Rejected",     callback_data="show_rejected")],
-        ]),
+        reply_markup=stats_keyboard(),
     )
 
 
@@ -193,15 +185,15 @@ async def issue_detail(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         await update.message.reply_text("Issue ID must be a number.  Example: /issue 3")
         return
 
-    issue = get_issue_by_id(issue_id)
+    issue = get_ticket(issue_id)
     if issue is None:
         await update.message.reply_text(f"Issue #{issue_id} not found.")
         return
 
     await context.bot.send_photo(
         chat_id=update.effective_chat.id,
-        photo=issue[3],
-        caption=build_full_issue_caption(issue),
+        photo=issue["photo_file_id"],
+        caption=build_full_ticket_caption(issue),
     )
 
 
@@ -215,7 +207,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     # ── Show issues by status list ──────────────────────────────────────────
     if data in STATUS_MAP:
         status = STATUS_MAP[data]
-        issues = get_issues_by_status(status)
+        issues = get_tickets_by_status(status)
 
         try:
             issues = sorted(issues, key=lambda x: x[9], reverse=True)[:20]
@@ -247,34 +239,27 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     # ── View single issue detail ────────────────────────────────────────────
     if data.startswith("view_issue_"):
         issue_id = int(data.replace("view_issue_", ""))
-        issue = get_issue_by_id(issue_id)
+        issue = get_ticket(issue_id)
         if issue is None:
             await query.message.reply_text(f"Issue #{issue_id} not found.")
             return
         try:
             await context.bot.send_photo(
                 chat_id=query.message.chat.id,
-                photo=issue[3],
-                caption=build_full_issue_caption(issue),
+                photo=issue["photo_file_id"],
+                caption=build_full_ticket_caption(issue),
             )
         except Exception as e:
             print(f"[VIEW PHOTO] {e}")
-            await query.message.reply_text(build_full_issue_caption(issue))
+            await query.message.reply_text(build_full_ticket_caption(issue))
         return
 
     # ── Start report flow ───────────────────────────────────────────────────
     if data == "report_problem":
         context.user_data.clear()
         await query.edit_message_text(
-            "🔧 What is broken?",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("📺 TV",       callback_data="item_tv")],
-                [InlineKeyboardButton("🪑 Chair",    callback_data="item_chair")],
-                [InlineKeyboardButton("🚪 Door",     callback_data="item_door")],
-                [InlineKeyboardButton("💻 Computer", callback_data="item_computer")],
-                [InlineKeyboardButton("💡 Light",    callback_data="item_light")],
-                [InlineKeyboardButton("📦 Other",    callback_data="item_other")],
-            ]),
+            "🔧 What item has a problem?",
+            reply_markup=item_keyboard(),
         )
         return
 
@@ -296,7 +281,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             context.user_data.update({"item": item, "step": "waiting_location"})
             await query.edit_message_text(
                 "📍 Where is it? Choose a floor or select Other.",
-                reply_markup=get_location_keyboard(),
+                reply_markup=location_keyboard(),
             )
         return
 
@@ -376,12 +361,12 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             return
 
         changed_by = query.from_user.first_name
-        update_issue_status(issue_id, status_text, changed_by)
+        update_ticket_status(issue_id, status_text, changed_by)
 
-        issue = get_issue_by_id(issue_id)
+        issue = get_ticket(issue_id)
         if issue:
             notify_msg = NOTIFY_TEXT.get(status_text, f"ℹ️ Your request status changed to {status_text}.")
-            await notify_reporter(context, issue[10], notify_msg)
+            await notify_reporter(context, issue["requester_id"], notify_msg)
 
         new_caption = update_caption_field(
             query.message.caption or "",
@@ -394,7 +379,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         try:
             await query.edit_message_caption(
                 caption=new_caption,
-                reply_markup=get_issue_action_keyboard(issue_id),
+                reply_markup=status_keyboard(issue_id),
             )
         except Exception as e:
             print(f"[STATUS CAPTION] {e}")
@@ -430,19 +415,19 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     clean = text.lstrip("#")
     if clean.isdigit():
         issue_id = int(clean)
-        issue = get_issue_by_id(issue_id)
+        issue = get_ticket(issue_id)
         if issue is None:
             await update.message.reply_text(f"Issue #{issue_id} not found.")
             return
         try:
             await context.bot.send_photo(
                 chat_id=update.effective_chat.id,
-                photo=issue[3],
-                caption=build_full_issue_caption(issue),
+                photo=issue["photo_file_id"],
+                caption=build_full_ticket_caption(issue),
             )
         except Exception as e:
             print(f"[LOOKUP PHOTO] {e}")
-            await update.message.reply_text(build_full_issue_caption(issue))
+            await update.message.reply_text(build_full_ticket_caption(issue))
         return
 
     # ── Report flow steps ──────────────────────────────────────────────────
@@ -451,7 +436,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         context.user_data.update({"item": text, "step": "waiting_location"})
         await update.message.reply_text(
             "📍 Where is it? Choose a floor or select Other.",
-            reply_markup=get_location_keyboard(),
+            reply_markup=location_keyboard(),
         )
         return
 
@@ -492,12 +477,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         reason    = text
         changed_by = update.effective_user.first_name
 
-        update_issue_status(issue_id, "Rejected", changed_by, reason)
+        update_ticket_status(issue_id, "Rejected", changed_by, reason)
 
-        issue = get_issue_by_id(issue_id)
+        issue = get_ticket(issue_id)
         if issue:
             await notify_reporter(
-                context, issue[10],
+                context,
+                issue["requester_id"],
                 f"❌ Your request was REJECTED\nReason: {reason}",
             )
 
@@ -515,7 +501,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 chat_id=context.user_data["chat_id"],
                 message_id=context.user_data["message_id"],
                 caption=new_caption,
-                reply_markup=get_issue_action_keyboard(issue_id),
+                reply_markup=status_keyboard(issue_id),
             )
         except Exception as e:
             print(f"[REJECT CAPTION] {e}")
@@ -532,7 +518,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     if step == "waiting_assignment_name":
         issue_id = context.user_data["issue_id"]
-        assign_issue(issue_id, text)
+        assign_ticket(issue_id, text)
 
         new_caption = update_caption_field(
             context.user_data.get("caption", ""),
@@ -544,7 +530,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 chat_id=context.user_data["chat_id"],
                 message_id=context.user_data["message_id"],
                 caption=new_caption,
-                reply_markup=get_issue_action_keyboard(issue_id),
+                reply_markup=status_keyboard(issue_id),
             )
         except Exception as e:
             print(f"[ASSIGN CAPTION] {e}")
@@ -574,14 +560,14 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
     team_name, group_id = get_team_for_item(data["item"])
 
-    issue_id = save_issue(
-        item=data["item"],
+    issue_id = create_ticket(
+        category=team_name,
+        item_name=data["item"],
         location=data["location"],
         photo_file_id=photo_file_id,
-        team=team_name,
-        reported_by=reported_by,
-        user_id=user_id,
-        description=description,
+        requester_name=reported_by,
+        requester_id=user_id,
+        issue_description=description,
     )
 
     caption = (
@@ -600,7 +586,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             chat_id=group_id,
             photo=photo_file_id,
             caption=caption,
-            reply_markup=get_issue_action_keyboard(issue_id),
+            reply_markup=status_keyboard(issue_id),
         )
     except Exception as e:
         print(f"[GROUP SEND] Failed to post Issue #{issue_id} to group {group_id}: {e}")

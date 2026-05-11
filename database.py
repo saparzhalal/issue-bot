@@ -1,224 +1,389 @@
-import os
+ import os
+from datetime import datetime
+
 import psycopg2
 from psycopg2.extras import RealDictCursor
-from datetime import datetime
+
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 
 
-def get_connection():
-    conn = psycopg2.connect(DATABASE_URL)
-    return conn
+# =========================
+# CONNECTION
+# =========================
 
+def get_connection():
+    return psycopg2.connect(DATABASE_URL)
+
+
+# =========================
+# DATABASE INITIALIZATION
+# =========================
 
 def init_db():
     conn = get_connection()
     cursor = conn.cursor()
 
+    # =========================
+    # TICKETS TABLE
+    # =========================
     cursor.execute("""
-        CREATE TABLE IF NOT EXISTS issues (
+        CREATE TABLE IF NOT EXISTS tickets (
             id SERIAL PRIMARY KEY,
-            item TEXT,
+
+            category TEXT,
+            item_name TEXT,
+            asset_brand TEXT,
+
             location TEXT,
+            issue_description TEXT,
+
             photo_file_id TEXT,
-            team TEXT,
-            status TEXT,
-            reported_by TEXT,
-            description TEXT,
+
+            status TEXT DEFAULT 'New',
+
+            requester_name TEXT,
+            requester_id BIGINT,
+
             assigned_to TEXT,
-            created_at TEXT,
-            user_id BIGINT
+
+            final_diagnosis TEXT,
+
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
+    """)
+
+    # =========================
+    # TICKET UPDATES TABLE
+    # =========================
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS ticket_updates (
+            id SERIAL PRIMARY KEY,
+
+            ticket_id INTEGER REFERENCES tickets(id) ON DELETE CASCADE,
+
+            old_status TEXT,
+            new_status TEXT,
+
+            updated_by TEXT,
+
+            notes TEXT,
+
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
+    # =========================
+    # ASSETS TABLE
+    # =========================
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS assets (
+            id SERIAL PRIMARY KEY,
+
+            asset_type TEXT,
+            brand TEXT,
+            model TEXT,
+
+            room TEXT,
+
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
+    # =========================
+    # INDEXES
+    # =========================
+    cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_ticket_status
+        ON tickets(status)
     """)
 
     cursor.execute("""
-        CREATE TABLE IF NOT EXISTS status_history (
-            id SERIAL PRIMARY KEY,
-            issue_id INTEGER,
-            status TEXT,
-            changed_by TEXT,
-            changed_at TEXT,
-            reason TEXT
-        )
+        CREATE INDEX IF NOT EXISTS idx_ticket_category
+        ON tickets(category)
     """)
 
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_status ON issues(status)")
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_user ON issues(user_id)")
+    cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_ticket_location
+        ON tickets(location)
+    """)
 
     conn.commit()
     conn.close()
 
 
-def save_issue(item, location, photo_file_id, team, reported_by, user_id, description):
+# =========================
+# CREATE TICKET
+# =========================
+
+def create_ticket(
+    category,
+    item_name,
+    location,
+    photo_file_id,
+    requester_name,
+    requester_id,
+    issue_description,
+    asset_brand=None
+):
     conn = get_connection()
     cursor = conn.cursor(cursor_factory=RealDictCursor)
 
     try:
         cursor.execute("""
-            INSERT INTO issues (
-                item, location, photo_file_id, team, status,
-                reported_by, description, assigned_to, created_at, user_id
+            INSERT INTO tickets (
+                category,
+                item_name,
+                asset_brand,
+                location,
+                issue_description,
+                photo_file_id,
+                requester_name,
+                requester_id
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING id
         """, (
-            item,
+            category,
+            item_name,
+            asset_brand,
             location,
+            issue_description,
             photo_file_id,
-            team,
-            "New",
-            reported_by,
-            description,
-            "Not assigned yet",
-            datetime.utcnow().isoformat(),
-            user_id,
+            requester_name,
+            requester_id
         ))
 
-        issue_id = cursor.fetchone()["id"]
+        ticket_id = cursor.fetchone()["id"]
+
         conn.commit()
-        return issue_id
+
+        return ticket_id
 
     except Exception as e:
-        print("DB Error (save_issue):", e)
+        print("DB ERROR [create_ticket]:", e)
         return None
 
     finally:
         conn.close()
 
 
-def get_issue_by_id(issue_id):
+# =========================
+# GET TICKET
+# =========================
+
+def get_ticket(ticket_id):
     conn = get_connection()
     cursor = conn.cursor(cursor_factory=RealDictCursor)
 
     cursor.execute("""
-        SELECT * FROM issues WHERE id = %s
-    """, (issue_id,))
+        SELECT *
+        FROM tickets
+        WHERE id = %s
+    """, (ticket_id,))
 
-    issue = cursor.fetchone()
+    ticket = cursor.fetchone()
+
     conn.close()
-    return issue
+
+    return ticket
 
 
-def assign_issue(issue_id, technician_name):
-    conn = get_connection()
-    cursor = conn.cursor()
+# =========================
+# UPDATE STATUS
+# =========================
 
-    try:
-        cursor.execute("""
-            UPDATE issues
-            SET assigned_to = %s
-            WHERE id = %s
-        """, (technician_name, issue_id))
-
-        conn.commit()
-
-    except Exception as e:
-        print("DB Error (assign_issue):", e)
-
-    finally:
-        conn.close()
-
-
-def update_issue_status(issue_id, status, changed_by=None, reason=None):
-    conn = get_connection()
-    cursor = conn.cursor()
-
-    try:
-        cursor.execute("""
-            UPDATE issues
-            SET status = %s
-            WHERE id = %s
-        """, (status, issue_id))
-
-        conn.commit()
-
-    except Exception as e:
-        print("DB Error (update_issue_status):", e)
-
-    finally:
-        conn.close()
-
-    if changed_by:
-        add_status_history(issue_id, status, changed_by, reason)
-
-
-def get_all_issues():
+def update_ticket_status(
+    ticket_id,
+    new_status,
+    updated_by=None,
+    notes=None
+):
     conn = get_connection()
     cursor = conn.cursor(cursor_factory=RealDictCursor)
 
-    cursor.execute("""
-        SELECT * FROM issues ORDER BY id DESC
-    """)
-
-    issues = cursor.fetchall()
-    conn.close()
-    return issues
-
-
-def add_status_history(issue_id, status, changed_by, reason=None):
-    conn = get_connection()
-    cursor = conn.cursor()
-
     try:
+        # Get old status
         cursor.execute("""
-            INSERT INTO status_history (
-                issue_id, status, changed_by, changed_at, reason
+            SELECT status
+            FROM tickets
+            WHERE id = %s
+        """, (ticket_id,))
+
+        row = cursor.fetchone()
+
+        if not row:
+            return False
+
+        old_status = row["status"]
+
+        # Update ticket
+        cursor.execute("""
+            UPDATE tickets
+            SET
+                status = %s,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = %s
+        """, (
+            new_status,
+            ticket_id
+        ))
+
+        # Add update history
+        cursor.execute("""
+            INSERT INTO ticket_updates (
+                ticket_id,
+                old_status,
+                new_status,
+                updated_by,
+                notes
             )
             VALUES (%s, %s, %s, %s, %s)
         """, (
-            issue_id,
-            status,
-            changed_by,
-            datetime.utcnow().isoformat(),
-            reason,
+            ticket_id,
+            old_status,
+            new_status,
+            updated_by,
+            notes
         ))
 
         conn.commit()
 
+        return True
+
     except Exception as e:
-        print("DB Error (add_status_history):", e)
+        print("DB ERROR [update_ticket_status]:", e)
+        return False
 
     finally:
         conn.close()
 
 
-def get_status_history(issue_id):
+# =========================
+# ASSIGN TICKET
+# =========================
+
+def assign_ticket(ticket_id, technician_name):
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    try:
+        cursor.execute("""
+            UPDATE tickets
+            SET
+                assigned_to = %s,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = %s
+        """, (
+            technician_name,
+            ticket_id
+        ))
+
+        conn.commit()
+
+        return True
+
+    except Exception as e:
+        print("DB ERROR [assign_ticket]:", e)
+        return False
+
+    finally:
+        conn.close()
+
+
+# =========================
+# FINAL DIAGNOSIS
+# =========================
+
+def add_final_diagnosis(ticket_id, diagnosis):
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    try:
+        cursor.execute("""
+            UPDATE tickets
+            SET
+                final_diagnosis = %s,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = %s
+        """, (
+            diagnosis,
+            ticket_id
+        ))
+
+        conn.commit()
+
+        return True
+
+    except Exception as e:
+        print("DB ERROR [add_final_diagnosis]:", e)
+        return False
+
+    finally:
+        conn.close()
+
+
+# =========================
+# GET ALL TICKETS
+# =========================
+
+def get_all_tickets():
     conn = get_connection()
     cursor = conn.cursor(cursor_factory=RealDictCursor)
 
     cursor.execute("""
-        SELECT status, changed_by, changed_at, reason
-        FROM status_history
-        WHERE issue_id = %s
-        ORDER BY id ASC
-    """, (issue_id,))
+        SELECT *
+        FROM tickets
+        ORDER BY id DESC
+    """)
 
     rows = cursor.fetchall()
+
     conn.close()
 
-    if not rows:
-        return "\nNo status updates yet."
-
-    text = ""
-    for row in rows:
-        text += f"\n- {row['status']} by {row['changed_by']} at {row['changed_at']}"
-        if row["reason"]:
-            text += f"\n  Reason: {row['reason']}"
-
-    return text
+    return rows
 
 
-def get_issues_by_status(status):
+# =========================
+# GET TICKETS BY STATUS
+# =========================
+
+def get_tickets_by_status(status):
     conn = get_connection()
     cursor = conn.cursor(cursor_factory=RealDictCursor)
 
     cursor.execute("""
-        SELECT id, item, location, photo_file_id, team, reported_by, created_at
-        FROM issues
+        SELECT *
+        FROM tickets
         WHERE status = %s
         ORDER BY id DESC
     """, (status,))
 
     rows = cursor.fetchall()
+
     conn.close()
+
+    return rows
+
+
+# =========================
+# GET TICKET HISTORY
+# =========================
+
+def get_ticket_history(ticket_id):
+    conn = get_connection()
+    cursor = conn.cursor(cursor_factory=RealDictCursor)
+
+    cursor.execute("""
+        SELECT *
+        FROM ticket_updates
+        WHERE ticket_id = %s
+        ORDER BY id ASC
+    """, (ticket_id,))
+
+    rows = cursor.fetchall()
+
+    conn.close()
+
     return rows
