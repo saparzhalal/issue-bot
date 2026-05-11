@@ -498,9 +498,19 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 f"❌ Your request was REJECTED\nReason: {reason}",
             )
             # notify group
+            issue = fetch_ticket(issue_id)
+            _group_id = MAINTENANCE_GROUP_ID
+
+            if issue:
+                try:
+                    team_name, group_id = get_team_for_item(issue.get("item_name", issue.get("item", "")))
+                    _group_id = group_id
+                except Exception:
+                    _group_id = MAINTENANCE_GROUP_ID
+
             try:
                 await context.bot.send_message(
-                    chat_id=context.chat_data["chat_id"],
+                    chat_id=_group_id,
                     text=(
                         f"❌ Issue #{issue_id} REJECTED\n\n"
                         f"Reason: {reason}\n\n"
@@ -560,9 +570,19 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
         await update.message.reply_text(f"✅ Issue #{issue_id} assigned to {text}.")
         # notify group
+        issue = fetch_ticket(issue_id)
+        _group_id = MAINTENANCE_GROUP_ID
+
+        if issue:
+            try:
+                team_name, group_id = get_team_for_item(issue.get("item_name", issue.get("item", "")))
+                _group_id = group_id
+            except Exception:
+                _group_id = MAINTENANCE_GROUP_ID
+
         try:
             await context.bot.send_message(
-                chat_id=context.chat_data["chat_id"],
+                chat_id=_group_id,
                 text=(
                     f"👷 Issue #{issue_id} ASSIGNED\n\n"
                     f"Assigned to: {text}"
@@ -589,9 +609,19 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 f"✅ Your issue has been FIXED\n\nWhat was done:\n{fix_reason}"
             )
             # notify group
+            issue = fetch_ticket(issue_id)
+            _group_id = MAINTENANCE_GROUP_ID
+
+            if issue:
+                try:
+                    team_name, group_id = get_team_for_item(issue.get("item_name", issue.get("item", "")))
+                    _group_id = group_id
+                except Exception:
+                    _group_id = MAINTENANCE_GROUP_ID
+
             try:
                 await context.bot.send_message(
-                    chat_id=context.chat_data["chat_id"],
+                    chat_id=_group_id,
                     text=(
                         f"✅ Issue #{issue_id} marked as FIXED\n\n"
                         f"🧾 What was done:\n{fix_reason}\n\n"
