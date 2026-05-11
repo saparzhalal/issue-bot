@@ -599,13 +599,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 # ─── Photo Handler ────────────────────────────────────────────────────────────
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if context.user_data.get("step") != "waiting_photo":
+    if context.chat_data.get("step") != "waiting_photo":
         await update.message.reply_text(
             "Please complete all steps first.\nType /start to begin."
         )
         return
 
-    data        = context.user_data
+    data = context.chat_data
     user_id     = update.effective_user.id
     reported_by = update.effective_user.first_name
     photo_file_id = update.message.photo[-1].file_id
@@ -653,4 +653,4 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         f"Photo: ✅ Received"
     )
 
-    context.user_data.clear()
+    context.chat_data.clear()
