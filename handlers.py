@@ -93,7 +93,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=main_menu_keyboard())
 
 async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(get_stats_message(), reply_markup=stats_keyboard())
+    await update.message.reply_text(
+        "🛠 Admin Dashboard\n\nSelect a filter to view latest issues:",
+        reply_markup=stats_keyboard()
+    )
 
 async def issue_detail(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args or not context.args[0].isdigit():
@@ -114,9 +117,16 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data in STATUS_MAP:
         status = STATUS_MAP[data]
         issues = by_status(status)
-        try: issues = sorted(issues, key=lambda x: x[9], reverse=True)[:20]
-        except Exception: issues = issues[:20]
-        def iid(i): return i.get("id") if isinstance(i, dict) else i[0]
+        try:
+            issues = sorted(
+                issues,
+                key=lambda x: x["id"] if isinstance(x, dict) else x[0],
+                reverse=True
+            )[:20]
+        except Exception:
+            issues = issues[:20]
+        def iid(i):
+            return i["id"] if isinstance(i, dict) and "id" in i else (i[0] if isinstance(i, (list, tuple)) else None)
         buttons = [[InlineKeyboardButton(f"#{iid(i)}", callback_data=f"view_issue_{iid(i)}")] for i in issues if iid(i)]
         if not buttons:
             await query.message.reply_text(f"No {status} issues found."); return
@@ -211,7 +221,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text, step = update.message.text.strip(), context.chat_data.get("step")
 
     if text.lower() in {"/start", "start"}: await start(update, context); return
-    if text.lower() == "aliadmin": await stats(update, context); return
+    if text.lower() == "aliadmin":
+        await stats(update, context)
+        return
 
     clean = text.lstrip("#")
     if clean.isdigit():
@@ -276,7 +288,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"✅ Issue #{issue_id} marked as fixed.")
         context.chat_data.clear(); return
 
-    await update.message.reply_text("Please type /start to begin reporting an issue.")
+    await update.message.reply_text(
+        "Please type /start to begin reporting an issue.\n\n"
+        "💡 Admin tip: send 'aliadmin' to open dashboard."
+    )
 
 # ─── Photo Handler ────────────────────────────────────────────────────────────
 
