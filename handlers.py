@@ -497,6 +497,18 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 issue["requester_id"],
                 f"❌ Your request was REJECTED\nReason: {reason}",
             )
+            # notify group
+            try:
+                await context.bot.send_message(
+                    chat_id=context.chat_data["chat_id"],
+                    text=(
+                        f"❌ Issue #{issue_id} REJECTED\n\n"
+                        f"Reason: {reason}\n\n"
+                        f"👷 By: {changed_by}"
+                    )
+                )
+            except Exception as e:
+                print(f"[REJECT GROUP MSG] {e}")
 
         new_caption = update_caption_field(
             context.chat_data.get("caption", ""),
@@ -547,6 +559,17 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             print(f"[ASSIGN CAPTION] {e}")
 
         await update.message.reply_text(f"✅ Issue #{issue_id} assigned to {text}.")
+        # notify group
+        try:
+            await context.bot.send_message(
+                chat_id=context.chat_data["chat_id"],
+                text=(
+                    f"👷 Issue #{issue_id} ASSIGNED\n\n"
+                    f"Assigned to: {text}"
+                )
+            )
+        except Exception as e:
+            print(f"[ASSIGN GROUP MSG] {e}")
         context.chat_data.clear()
         return
 
@@ -565,6 +588,18 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 issue["requester_id"],
                 f"✅ Your issue has been FIXED\n\nWhat was done:\n{fix_reason}"
             )
+            # notify group
+            try:
+                await context.bot.send_message(
+                    chat_id=context.chat_data["chat_id"],
+                    text=(
+                        f"✅ Issue #{issue_id} marked as FIXED\n\n"
+                        f"🧾 What was done:\n{fix_reason}\n\n"
+                        f"👷 By: {changed_by}"
+                    )
+                )
+            except Exception as e:
+                print(f"[FIX GROUP MSG] {e}")
 
         new_caption = update_caption_field(
             context.chat_data.get("caption", ""),
