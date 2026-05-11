@@ -12,8 +12,7 @@ from services.ticket_service import (
     by_status,
 )
 
-from services.workflow_service import requires_reason, next_step
-from services.notification_service import notify_user, build_fix_message, build_reject_message
+from services.notification_service import notify_user
 from keyboards import (
     main_menu_keyboard,
     item_keyboard,
@@ -54,9 +53,9 @@ STATUS_TEXT_MAP = {
 
 # Notification messages sent to the reporter
 NOTIFY_TEXT = {
-    "In Progress": "🟡 Your request is now IN PROGRESS.",
-    "Fixed":       "✅ Your request has been FIXED.",
-    "Rejected":    "❌ Your request was REJECTED.",
+    "In Progress": "🟡 [Issue #{issue_id}] Your request is now IN PROGRESS.",
+    "Fixed":       "✅ [Issue #{issue_id}] Your request has been FIXED.",
+    "Rejected":    "❌ [Issue #{issue_id}] Your request was REJECTED.",
 }
 
 
@@ -376,7 +375,10 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
         issue = fetch_ticket(issue_id)
         if issue:
-            notify_msg = NOTIFY_TEXT.get(status_text, f"ℹ️ Your request status changed to {status_text}.")
+            notify_msg = NOTIFY_TEXT.get(
+                status_text,
+                f"ℹ️ [Issue #{issue_id}] Your request status changed to {status_text}."
+            ).format(issue_id=issue_id)
             await notify_user(context, issue["requester_id"], notify_msg)
 
         new_caption = update_caption_field(
