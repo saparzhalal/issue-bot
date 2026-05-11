@@ -3,14 +3,17 @@ from telegram.ext import ContextTypes
 
 from ai_helper import get_description_keyboard
 from config import ICT_GROUP_ID, MAINTENANCE_GROUP_ID
-from database import (
-    create_ticket,
-    get_ticket,
-    assign_ticket,
-    update_ticket_status,
-    get_ticket_history,
-    get_tickets_by_status,
+from services.ticket_service import (
+    new_ticket,
+    fetch_ticket,
+    assign,
+    set_status,
+    history,
+    by_status,
 )
+
+from services.workflow_service import requires_reason, next_step
+from services.notification_service import notify_user, build_fix_message, build_reject_message
 from keyboards import (
     main_menu_keyboard,
     item_keyboard,
@@ -77,7 +80,7 @@ def get_team_for_item(item: str) -> tuple[str, int]:
 
 def get_stats_message() -> str:
     statuses = ["New", "In Progress", "Fixed", "Rejected"]
-    counts = {s: len(get_tickets_by_status(s)) for s in statuses}
+    counts = {s: len(by_status(s)) for s in statuses}
     total = sum(counts.values())
     return (
         "📊 Current Issue Report\n\n"
@@ -90,7 +93,7 @@ def get_stats_message() -> str:
 
 
 def build_full_ticket_caption(ticket: dict) -> str:
-    status_history = get_ticket_history(ticket["id"])
+    status_history = history(ticket["id"])
 
     history_text = ""
 
@@ -148,20 +151,14 @@ def update_caption_field(caption: str, updates: dict[str, str]) -> str:
     return "\n".join(new_lines)
 
 
-async def notify_reporter(context, reporter_user_id: int | None, text: str) -> None:
-    """Silently send a status notification to the original reporter."""
-    if not reporter_user_id:
-        return
-    try:
-        await context.bot.send_message(chat_id=reporter_user_id, text=text)
-    except Exception as e:
-        print(f"[NOTIFY] Could not notify user {reporter_user_id}: {e}")
+
+# notify_reporter is replaced everywhere with notify_user
 
 
 # ─── Command Handlers ─────────────────────────────────────────────────────────
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    context.user_data.clear()
+    context.chat_data.clear()
     await update.message.reply_text(
         "👋 Welcome to Company Issue Reporter Bot\n\nPlease click below to report an issue.",
         reply_markup=main_menu_keyboard(),
@@ -185,7 +182,7 @@ async def issue_detail(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         await update.message.reply_text("Issue ID must be a number.  Example: /issue 3")
         return
 
-    issue = get_ticket(issue_id)
+    issue = fetch_ticket(issue_id)
     if issue is None:
         await update.message.reply_text(f"Issue #{issue_id} not found.")
         return
@@ -207,7 +204,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     # ── Show issues by status list ──────────────────────────────────────────
     if data in STATUS_MAP:
         status = STATUS_MAP[data]
-        issues = get_tickets_by_status(status)
+        issues = by_status(status)
 
         try:
             issues = sorted(issues, key=lambda x: x[9], reverse=True)[:20]
@@ -239,7 +236,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     # ── View single issue detail ────────────────────────────────────────────
     if data.startswith("view_issue_"):
         issue_id = int(data.replace("view_issue_", ""))
-        issue = get_ticket(issue_id)
+        issue = fetch_ticket(issue_id)
         if issue is None:
             await query.message.reply_text(f"Issue #{issue_id} not found.")
             return
@@ -256,7 +253,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     # ── Start report flow ───────────────────────────────────────────────────
     if data == "report_problem":
-        context.user_data.clear()
+        context.chat_data.clear()
         await query.edit_message_text(
             "🔧 What item has a problem?",
             reply_markup=item_keyboard(),
@@ -273,12 +270,12 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             "item_light":    "Light",
         }
         if data == "item_other":
-            context.user_data["step"] = "waiting_item"
+            context.chat_data["step"] = "waiting_item"
             await query.edit_message_text("✍️ Please type the item name.")
             return
         item = ITEM_MAP.get(data)
         if item:
-            context.user_data.update({"item": item, "step": "waiting_location"})
+            context.chat_data.update({"item": item, "step": "waiting_location"})
             await query.edit_message_text(
                 "📍 Where is it? Choose a floor or select Other.",
                 reply_markup=location_keyboard(),
@@ -287,15 +284,15 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     # ── Select floor / location ─────────────────────────────────────────────
     if data.startswith("loc_"):
-        if not context.user_data.get("item"):
+        if not context.chat_data.get("item"):
             await query.message.reply_text("⚠️ Session expired. Please type /start.")
             return
         if data == "loc_other":
-            context.user_data["step"] = "waiting_location"
+            context.chat_data["step"] = "waiting_location"
             await query.edit_message_text("📍 Please type the exact location.")
             return
         floor = data.replace("loc_", "")
-        context.user_data.update({"floor": floor, "step": "waiting_room"})
+        context.chat_data.update({"floor": floor, "step": "waiting_room"})
         await query.edit_message_text(
             f"📍 Floor: {floor}\n\nNow type the room or area.\nExample: Room 305, Lab 2, Library"
         )
@@ -303,22 +300,22 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     # ── Select description ──────────────────────────────────────────────────
     if data.startswith("desc_"):
-        if not context.user_data.get("item"):
+        if not context.chat_data.get("item"):
             await query.message.reply_text("⚠️ Session expired. Please type /start.")
             return
         if data == "desc_other":
-            context.user_data["step"] = "waiting_description"
+            context.chat_data["step"] = "waiting_description"
             await query.edit_message_text("📝 Please type the problem description.")
             return
         description = data.replace("desc_", "")
-        context.user_data.update({"description": description, "step": "waiting_photo"})
+        context.chat_data.update({"description": description, "step": "waiting_photo"})
         await query.edit_message_text("📸 Now send a photo of the broken item.")
         return
 
     # ── Assign technician ───────────────────────────────────────────────────
     if data.startswith("assign_"):
         issue_id = int(data.replace("assign_", ""))
-        context.user_data.update({
+        context.chat_data.update({
             "step":       "waiting_assignment_name",
             "issue_id":   issue_id,
             "chat_id":    query.message.chat_id,
@@ -350,7 +347,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
         # Rejected requires a typed reason — defer to handle_message
         if status_text == "Rejected":
-            context.user_data.update({
+            context.chat_data.update({
                 "step":       "waiting_reject_reason",
                 "issue_id":   issue_id,
                 "chat_id":    query.message.chat_id,
@@ -360,13 +357,27 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             await query.message.reply_text(f"❌ Type the rejection reason for Issue #{issue_id}.")
             return
 
-        changed_by = query.from_user.first_name
-        update_ticket_status(issue_id, status_text, changed_by)
+        if status_text == "Fixed":
+            context.chat_data.update({
+                "step": "waiting_fixed_reason",
+                "issue_id": issue_id,
+                "chat_id": query.message.chat_id,
+                "message_id": query.message.message_id,
+                "caption": query.message.caption or "",
+            })
 
-        issue = get_ticket(issue_id)
+            await query.message.reply_text(
+                f"✅ Please type what was fixed for Issue #{issue_id}."
+            )
+            return
+
+        changed_by = query.from_user.first_name
+        set_status(issue_id, status_text, changed_by)
+
+        issue = fetch_ticket(issue_id)
         if issue:
             notify_msg = NOTIFY_TEXT.get(status_text, f"ℹ️ Your request status changed to {status_text}.")
-            await notify_reporter(context, issue["requester_id"], notify_msg)
+            await notify_user(context, issue["requester_id"], notify_msg)
 
         new_caption = update_caption_field(
             query.message.caption or "",
@@ -399,7 +410,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     text = update.message.text.strip()
-    step = context.user_data.get("step")
+    step = context.chat_data.get("step")
 
     # Start command (text alias)
     if text.lower() in {"/start", "start"}:
@@ -415,7 +426,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     clean = text.lstrip("#")
     if clean.isdigit():
         issue_id = int(clean)
-        issue = get_ticket(issue_id)
+        issue = fetch_ticket(issue_id)
         if issue is None:
             await update.message.reply_text(f"Issue #{issue_id} not found.")
             return
@@ -433,7 +444,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     # ── Report flow steps ──────────────────────────────────────────────────
 
     if step == "waiting_item":
-        context.user_data.update({"item": text, "step": "waiting_location"})
+        context.chat_data.update({"item": text, "step": "waiting_location"})
         await update.message.reply_text(
             "📍 Where is it? Choose a floor or select Other.",
             reply_markup=location_keyboard(),
@@ -441,27 +452,27 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return
 
     if step == "waiting_room":
-        floor = context.user_data.get("floor", "")
-        context.user_data.update({
+        floor = context.chat_data.get("floor", "")
+        context.chat_data.update({
             "location": f"{floor} - {text}",
             "step": "waiting_description",
         })
         await update.message.reply_text(
             "📝 What is the problem? Choose one or select Other.",
-            reply_markup=get_description_keyboard(context.user_data["item"]),
+            reply_markup=get_description_keyboard(context.chat_data["item"]),
         )
         return
 
     if step == "waiting_location":
-        context.user_data.update({"location": text, "step": "waiting_description"})
+        context.chat_data.update({"location": text, "step": "waiting_description"})
         await update.message.reply_text(
             "📝 What is the problem? Choose one or select Other.",
-            reply_markup=get_description_keyboard(context.user_data["item"]),
+            reply_markup=get_description_keyboard(context.chat_data["item"]),
         )
         return
 
     if step == "waiting_description":
-        context.user_data.update({"description": text, "step": "waiting_photo"})
+        context.chat_data.update({"description": text, "step": "waiting_photo"})
         await update.message.reply_text("📸 Now send a photo of the broken item.")
         return
 
@@ -473,22 +484,22 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     # ── Admin / technician flow steps ──────────────────────────────────────
 
     if step == "waiting_reject_reason":
-        issue_id  = context.user_data["issue_id"]
+        issue_id  = context.chat_data["issue_id"]
         reason    = text
         changed_by = update.effective_user.first_name
 
-        update_ticket_status(issue_id, "Rejected", changed_by, reason)
+        set_status(issue_id, "Rejected", changed_by, reason)
 
-        issue = get_ticket(issue_id)
+        issue = fetch_ticket(issue_id)
         if issue:
-            await notify_reporter(
+            await notify_user(
                 context,
                 issue["requester_id"],
                 f"❌ Your request was REJECTED\nReason: {reason}",
             )
 
         new_caption = update_caption_field(
-            context.user_data.get("caption", ""),
+            context.chat_data.get("caption", ""),
             {
                 "📌 Status:":           "Rejected",
                 "👷 Last updated by:":  changed_by,
@@ -498,37 +509,37 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
         try:
             await context.bot.edit_message_caption(
-                chat_id=context.user_data["chat_id"],
-                message_id=context.user_data["message_id"],
+                chat_id=context.chat_data["chat_id"],
+                message_id=context.chat_data["message_id"],
                 caption=new_caption,
                 reply_markup=status_keyboard(issue_id),
             )
         except Exception as e:
             print(f"[REJECT CAPTION] {e}")
             await context.bot.send_message(
-                chat_id=context.user_data["chat_id"],
+                chat_id=context.chat_data["chat_id"],
                 text="⚠️ Issue rejected, but the group message could not be updated.",
             )
 
         await update.message.reply_text(
             f"✅ Issue #{issue_id} rejected by {changed_by}.\nReason: {reason}"
         )
-        context.user_data.clear()
+        context.chat_data.clear()
         return
 
     if step == "waiting_assignment_name":
-        issue_id = context.user_data["issue_id"]
-        assign_ticket(issue_id, text)
+        issue_id = context.chat_data["issue_id"]
+        assign(issue_id, text)
 
         new_caption = update_caption_field(
-            context.user_data.get("caption", ""),
+            context.chat_data.get("caption", ""),
             {"👷 Assigned to:": text},
         )
 
         try:
             await context.bot.edit_message_caption(
-                chat_id=context.user_data["chat_id"],
-                message_id=context.user_data["message_id"],
+                chat_id=context.chat_data["chat_id"],
+                message_id=context.chat_data["message_id"],
                 caption=new_caption,
                 reply_markup=status_keyboard(issue_id),
             )
@@ -536,7 +547,49 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             print(f"[ASSIGN CAPTION] {e}")
 
         await update.message.reply_text(f"✅ Issue #{issue_id} assigned to {text}.")
-        context.user_data.clear()
+        context.chat_data.clear()
+        return
+
+    if step == "waiting_fixed_reason":
+        issue_id = context.chat_data["issue_id"]
+        fix_reason = text
+        changed_by = update.effective_user.first_name
+
+        set_status(issue_id, "Fixed", changed_by, fix_reason)
+
+        issue = fetch_ticket(issue_id)
+
+        if issue:
+            await notify_user(
+                context,
+                issue["requester_id"],
+                f"✅ Your issue has been FIXED\n\nWhat was done:\n{fix_reason}"
+            )
+
+        new_caption = update_caption_field(
+            context.chat_data.get("caption", ""),
+            {
+                "📌 Status:": "Fixed",
+                "👷 Last updated by:": changed_by,
+                "🧾 Final Diagnosis:": fix_reason,
+            },
+        )
+
+        try:
+            await context.bot.edit_message_caption(
+                chat_id=context.chat_data["chat_id"],
+                message_id=context.chat_data["message_id"],
+                caption=new_caption,
+                reply_markup=status_keyboard(issue_id),
+            )
+        except Exception as e:
+            print(f"[FIX CAPTION] {e}")
+
+        await update.message.reply_text(
+            f"✅ Issue #{issue_id} marked as fixed."
+        )
+
+        context.chat_data.clear()
         return
 
     # Default fallback
@@ -560,14 +613,14 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
     team_name, group_id = get_team_for_item(data["item"])
 
-    issue_id = create_ticket(
+    issue_id = new_ticket(
         category=team_name,
-        item_name=data["item"],
+        item=data["item"],
         location=data["location"],
-        photo_file_id=photo_file_id,
-        requester_name=reported_by,
-        requester_id=user_id,
-        issue_description=description,
+        photo=photo_file_id,
+        name=reported_by,
+        user_id=user_id,
+        description=description,
     )
 
     caption = (
