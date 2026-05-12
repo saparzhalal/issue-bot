@@ -232,8 +232,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ── Photo Handler ─────────────────────────────────────────────────────────────
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if context.chat_data.get("step") != "waiting_photo":
-        await update.message.reply_text("Please complete all steps first.\nType /start to begin."); return
+    # Safer validation: ensure required data exists instead of strict step check
+    if not context.chat_data.get("item") or not context.chat_data.get("location"):
+        await update.message.reply_text(
+            "❌ Please complete all steps first.\nType /start to begin."
+        )
+        return
     d = context.chat_data
     user_id, reported_by = update.effective_user.id, update.effective_user.first_name
     photo_file_id = update.message.photo[-1].file_id
