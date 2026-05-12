@@ -108,33 +108,33 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if data == "report_problem":
         context.chat_data.clear()
-        await query.edit_message_text("🔧 What item has a problem?", reply_markup=item_keyboard()); return
+        await query.edit_message_text("What item?", reply_markup=item_keyboard()); return
 
     if data.startswith("item_"):
         if data == "item_other":
             context.chat_data["step"] = "waiting_item"
-            await query.edit_message_text("✍️ Please type the item name."); return
+            await query.edit_message_text("Item?"); return
         if item := ITEM_MAP.get(data):
             context.chat_data.update({"item": item, "step": "waiting_location"})
-            await query.edit_message_text("📍 Where is it? Choose a floor or select Other.", reply_markup=location_keyboard())
+            await query.edit_message_text("Where?", reply_markup=location_keyboard())
         return
 
     if data.startswith("loc_"):
         if not context.chat_data.get("item"): await query.message.reply_text("⚠️ Session expired. Please type /start."); return
         if data == "loc_other":
             context.chat_data["step"] = "waiting_location"
-            await query.edit_message_text("📍 Please type the exact location."); return
+            await query.edit_message_text("Location?"); return
         floor = data.replace("loc_", "")
         context.chat_data.update({"floor": floor, "step": "waiting_room"})
-        await query.edit_message_text(f"📍 Floor: {floor}\n\nNow type the room or area.\nExample: Room 305, Lab 2, Library"); return
+        await query.edit_message_text(f"Floor: {floor}\nRoom?"); return
 
     if data.startswith("desc_"):
         if not context.chat_data.get("item"): await query.message.reply_text("⚠️ Session expired. Please type /start."); return
         if data == "desc_other":
             context.chat_data["step"] = "waiting_description"
-            await query.edit_message_text("📝 Please type the problem description."); return
+            await query.edit_message_text("Problem?"); return
         context.chat_data.update({"description": data.replace("desc_", ""), "step": "waiting_photo"})
-        await query.edit_message_text("📸 Now send a photo of the broken item."); return
+        await query.edit_message_text("Send photo 📸"); return
 
     if data.startswith("assign_"):
         issue_id = int(data.replace("assign_", ""))
@@ -184,15 +184,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Report flow
     if step == "waiting_item":
         cd.update({"item": text, "step": "waiting_location"})
-        await update.message.reply_text("📍 Where is it? Choose a floor or select Other.", reply_markup=location_keyboard()); return
+        await update.message.reply_text("Where?", reply_markup=location_keyboard()); return
     if step in ("waiting_room", "waiting_location"):
         loc = f"{cd.get('floor','')} - {text}" if step == "waiting_room" else text
         cd.update({"location": loc, "step": "waiting_description"})
-        await update.message.reply_text("📝 What is the problem? Choose one or select Other.",
+        await update.message.reply_text("Problem?",
                                         reply_markup=get_description_keyboard(cd["item"])); return
     if step == "waiting_description":
         cd.update({"description": text, "step": "waiting_photo"})
-        await update.message.reply_text("📸 Now send a photo of the broken item."); return
+        await update.message.reply_text("Send photo 📸"); return
     if step == "waiting_photo":
         await update.message.reply_text("📸 Please send a *photo*, not text.", parse_mode="Markdown"); return
 
