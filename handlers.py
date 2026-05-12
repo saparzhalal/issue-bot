@@ -181,6 +181,20 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await (send_issue(context.bot, update.effective_chat.id, issue) if issue
                else update.message.reply_text(f"Issue #{clean} not found.")); return
 
+    # Quick natural language detection (very important UX fix)
+    if not step and text and len(text) > 5:
+        lowered = text.lower()
+        if any(x in lowered for x in ["tv","door","light","computer","chair","ac","aircon","wifi"]):
+            cd["item"] = next((x for x in ["TV","Door","Light","Computer","Chair"] if x.lower() in lowered), "Other")
+        else:
+            cd["item"] = "Other"
+
+        cd["description"] = text
+        cd["step"] = "waiting_location"
+
+        await update.message.reply_text("Where?", reply_markup=location_keyboard())
+        return
+
     # Report flow
     if step == "waiting_item":
         cd.update({"item": text, "step": "waiting_location"})
@@ -227,18 +241,41 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await group_msg(context, issue_id, f"👷 Issue #{issue_id} ASSIGNED\n\nAssigned to: {text}")
         context.chat_data.clear(); return
 
+    # ── Auto-start flow (no step yet) ───────────────────────────────────────
+    if not step:
+        # treat first message as description
+        cd.update({
+            "item": "Other",
+            "description": text,
+            "step": "waiting_location"
+        })
+        await update.message.reply_text(
+            "Where?",
+            reply_markup=location_keyboard()
+        )
+        return
+
     await update.message.reply_text("Please type /start to begin reporting an issue.")
+    return
 
 # ── Photo Handler ─────────────────────────────────────────────────────────────
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Safer validation: ensure required data exists instead of strict step check
-    if not context.chat_data.get("item") or not context.chat_data.get("location"):
-        await update.message.reply_text(
-            "❌ Please complete all steps first.\nType /start to begin."
-        )
-        return
+    # Allow flexible submission even if flow was incomplete
+    if not context.chat_data:
+        context.chat_data = {}
+
     d = context.chat_data
+
+    if not d.get("item"):
+        d["item"] = "Other"
+
+    if not d.get("location"):
+        d["location"] = "Unknown"
+
+    if not d.get("description"):
+        d["description"] = "No description"
+
     user_id, reported_by = update.effective_user.id, update.effective_user.first_name
     photo_file_id = update.message.photo[-1].file_id
     description = d.get("description", "No description")
