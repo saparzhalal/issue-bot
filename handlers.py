@@ -26,11 +26,34 @@ def get_group_id(issue_id):
     return get_team(issue.get("item_name", issue.get("item", "")))[1] if issue else MAINTENANCE_GROUP_ID
 
 def get_stats_message():
-    s = ["New", "In Progress", "Fixed", "Rejected"]
-    c = {x: len(by_status(x)) for x in s}
-    return (f"📊 Current Issue Report\n\nTotal Issues: {sum(c.values())}\n\n"
-            f"🆕 New: {c['New']}\n🔄 In Progress: {c['In Progress']}\n"
-            f"✅ Fixed: {c['Fixed']}\n❌ Rejected: {c['Rejected']}")
+    from collections import Counter
+
+    statuses = ["New", "In Progress", "Fixed", "Rejected"]
+    counts = {x: len(by_status(x)) for x in statuses}
+    total = sum(counts.values())
+
+    fixed_items = [i.get("item_name") if isinstance(i, dict) else None for i in by_status("Fixed")]
+    rejected_items = [i.get("item_name") if isinstance(i, dict) else None for i in by_status("Rejected")]
+
+    fixed_counter = Counter([i for i in fixed_items if i])
+    rejected_counter = Counter([i for i in rejected_items if i])
+
+    top_fixed = fixed_counter.most_common(3)
+    top_rejected = rejected_counter.most_common(3)
+
+    fixed_text = "\n".join([f"   - {k}: {v}" for k, v in top_fixed]) if top_fixed else "   - No data"
+    rejected_text = "\n".join([f"   - {k}: {v}" for k, v in top_rejected]) if top_rejected else "   - No data"
+
+    return (
+        "📊 Current Issue Report\n\n"
+        f"Total Issues: {total}\n\n"
+        f"🆕 New: {counts['New']}\n"
+        f"🔄 In Progress: {counts['In Progress']}\n"
+        f"✅ Fixed: {counts['Fixed']}\n"
+        f"❌ Rejected: {counts['Rejected']}\n\n"
+        f"📈 Top Fixed Items:\n{fixed_text}\n\n"
+        f"📉 Top Rejected Items:\n{rejected_text}"
+    )
 
 def build_caption(t):
     hist = "".join(
@@ -74,7 +97,13 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                     reply_markup=main_menu_keyboard())
 
 async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(get_stats_message(), reply_markup=stats_keyboard())
+    await update.message.reply_text(
+        get_stats_message(),
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("📈 View Fixed Details", callback_data="fixed_details")],
+            [InlineKeyboardButton("📉 View Rejected Details", callback_data="rejected_details")],
+        ])
+    )
 
 async def issue_detail(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args or not context.args[0].isdigit():
@@ -164,6 +193,56 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await edit_caption(context, query.message.chat_id, query.message.message_id,
                            {"📌 Status:": status_text, "👷 Last updated by:": changed_by}, issue_id, query.message.caption or "")
         await query.answer(f"Issue #{issue_id} → {status_text} by {changed_by}"); return
+
+    # ── FIXED DETAILS ─────────────────────────────────────────────
+    if data == "fixed_details":
+        issues = by_status("Fixed")[:20]
+
+        if not issues:
+            await query.message.reply_text("No fixed issues found.")
+            return
+
+        text = "✅ FIXED ISSUES (DETAILS)\n\n"
+
+        for i in issues:
+            issue_id = i.get("id") if isinstance(i, dict) else i[0]
+            issue = fetch_ticket(issue_id)
+            if not issue:
+                continue
+
+            text += (
+                f"# {issue_id} - {issue.get('item_name') or issue.get('item')}\n"
+                f"🧾 What was done:\n{issue.get('final_diagnosis') or 'Not added'}\n"
+                f"👷 By: {issue.get('assigned_to') or 'Unknown'}\n\n"
+            )
+
+        await query.message.reply_text(text)
+        return
+
+    # ── REJECTED DETAILS ───────────────────────────────────────────
+    if data == "rejected_details":
+        issues = by_status("Rejected")[:20]
+
+        if not issues:
+            await query.message.reply_text("No rejected issues found.")
+            return
+
+        text = "❌ REJECTED ISSUES (DETAILS)\n\n"
+
+        for i in issues:
+            issue_id = i.get("id") if isinstance(i, dict) else i[0]
+            issue = fetch_ticket(issue_id)
+            if not issue:
+                continue
+
+            text += (
+                f"# {issue_id} - {issue.get('item_name') or issue.get('item')}\n"
+                f"🧾 Reason:\n{issue.get('rejection_reason') or 'Not added'}\n"
+                f"👷 By: {issue.get('assigned_to') or 'Unknown'}\n\n"
+            )
+
+        await query.message.reply_text(text)
+        return
 
     await query.answer("Unknown action.", show_alert=True)
 
