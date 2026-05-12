@@ -100,8 +100,20 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         get_stats_message(),
         reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("📈 View Fixed Details", callback_data="fixed_details")],
-            [InlineKeyboardButton("📉 View Rejected Details", callback_data="rejected_details")],
+            [
+                InlineKeyboardButton("🆕 New", callback_data="show_new"),
+                InlineKeyboardButton("🔄 In Progress", callback_data="show_progress")
+            ],
+            [
+                InlineKeyboardButton("✅ Fixed", callback_data="show_fixed"),
+                InlineKeyboardButton("❌ Rejected", callback_data="show_rejected")
+            ],
+            [
+                InlineKeyboardButton("📈 View Fixed Details", callback_data="fixed_details")
+            ],
+            [
+                InlineKeyboardButton("📉 View Rejected Details", callback_data="rejected_details")
+            ]
         ])
     )
 
