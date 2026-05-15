@@ -277,19 +277,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await (send_issue(context.bot, update.effective_chat.id, issue) if issue
                else update.message.reply_text(f"Issue #{clean} not found.")); return
 
-    # Quick natural language detection (very important UX fix)
-    if not step and text and len(text) > 5:
-        lowered = text.lower()
-        if any(x in lowered for x in ["tv","door","light","computer","chair","ac","aircon","wifi"]):
-            cd["item"] = next((x for x in ["TV","Door","Light","Computer","Chair"] if x.lower() in lowered), "Other")
-        else:
-            cd["item"] = "Other"
-
-        cd["description"] = text
-        cd["step"] = "waiting_location"
-
-        await update.message.reply_text("Where?", reply_markup=location_keyboard())
-        return
 
     # Report flow
     if step == "waiting_item":
@@ -357,11 +344,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ── Photo Handler ─────────────────────────────────────────────────────────────
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Allow flexible submission even if flow was incomplete
-    if not context.chat_data:
-        context.chat_data = {}
-
     d = context.chat_data
+    if d.get("step") != "waiting_photo":
+        await update.message.reply_text(
+            "Please complete all steps first.\nType /start to begin."
+        )
+        return
 
     if not d.get("item"):
         d["item"] = "Other"
