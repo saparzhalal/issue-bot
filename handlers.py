@@ -113,7 +113,7 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ],
             [
                 InlineKeyboardButton("📉 View Rejected Details", callback_data="rejected_details")
-            ]
+            ] 
         ])
     )
 
@@ -128,7 +128,12 @@ async def issue_detail(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    await query.answer()
+
+    try:
+        await query.answer()
+    except Exception as e:
+        print(f"[QUERY_ANSWER] {e}")
+
     data = query.data
 
     if data in STATUS_MAP:
@@ -382,3 +387,4 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"✅ Report submitted!\n\nIssue ID: #{issue_id}\nItem: {d['item']}\n"
                                     f"Location: {d['location']}\nTeam: {team_name}\nPhoto: ✅ Received")
     context.chat_data.clear()
+    
