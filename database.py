@@ -1,19 +1,54 @@
 import os
-from datetime import datetime
-
+import time
 import psycopg2
 from psycopg2.extras import RealDictCursor
 
+# =========================
+# CONFIG
+# =========================
 
 DATABASE_URL = os.getenv("DATABASE_URL")
+
+if not DATABASE_URL:
+    raise EnvironmentError(
+        "\n\n❌ DATABASE_URL is not set!\n"
+        "Please set it in your environment variables.\n"
+        "Example: postgresql://user:password@host:5432/dbname\n"
+    )
+
+# Fix for Railway/Render — they sometimes give 'postgres://' which psycopg2 doesn't accept
+if DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
 
 
 # =========================
 # CONNECTION
 # =========================
 
-def get_connection():
-    return psycopg2.connect(DATABASE_URL)
+def get_connection(retries=5, delay=3):
+    """
+    Try to connect to the database with retries.
+    Useful when the bot starts before the DB container is ready (Docker).
+    """
+    last_error = None
+    for attempt in range(1, retries + 1):
+        try:
+            conn = psycopg2.connect(DATABASE_URL)
+            return conn
+        except psycopg2.OperationalError as e:
+            last_error = e
+            print(f"[DB] Connection attempt {attempt}/{retries} failed: {e}")
+            if attempt < retries:
+                print(f"[DB] Retrying in {delay} seconds...")
+                time.sleep(delay)
+    raise ConnectionError(
+        f"\n\n❌ Could not connect to the database after {retries} attempts.\n"
+        f"Last error: {last_error}\n\n"
+        f"Make sure:\n"
+        f"  1. Your DATABASE_URL is correct: {DATABASE_URL[:40]}...\n"
+        f"  2. PostgreSQL is running and reachable.\n"
+        f"  3. If using Docker, the 'db' service is healthy before the bot starts.\n"
+    )
 
 
 # =========================
@@ -48,10 +83,24 @@ def init_db():
             assigned_to TEXT,
 
             final_diagnosis TEXT,
+            rejection_reason TEXT,
 
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
+    """)
+
+    # Add rejection_reason column if it doesn't exist yet (safe migration)
+    cursor.execute("""
+        DO $$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_name = 'tickets' AND column_name = 'rejection_reason'
+            ) THEN
+                ALTER TABLE tickets ADD COLUMN rejection_reason TEXT;
+            END IF;
+        END$$;
     """)
 
     # =========================
@@ -111,6 +160,7 @@ def init_db():
 
     conn.commit()
     conn.close()
+    print("[DB] ✅ Database initialized successfully.")
 
 
 # =========================
@@ -156,9 +206,7 @@ def create_ticket(
         ))
 
         ticket_id = cursor.fetchone()["id"]
-
         conn.commit()
-
         return ticket_id
 
     except Exception as e:
@@ -177,17 +225,21 @@ def get_ticket(ticket_id):
     conn = get_connection()
     cursor = conn.cursor(cursor_factory=RealDictCursor)
 
-    cursor.execute("""
-        SELECT *
-        FROM tickets
-        WHERE id = %s
-    """, (ticket_id,))
+    try:
+        cursor.execute("""
+            SELECT *
+            FROM tickets
+            WHERE id = %s
+        """, (ticket_id,))
 
-    ticket = cursor.fetchone()
+        return cursor.fetchone()
 
-    conn.close()
+    except Exception as e:
+        print("DB ERROR [get_ticket]:", e)
+        return None
 
-    return ticket
+    finally:
+        conn.close()
 
 
 # =========================
@@ -206,31 +258,41 @@ def update_ticket_status(
     try:
         # Get old status
         cursor.execute("""
-            SELECT status
-            FROM tickets
-            WHERE id = %s
+            SELECT status FROM tickets WHERE id = %s
         """, (ticket_id,))
 
         row = cursor.fetchone()
-
         if not row:
             return False
 
         old_status = row["status"]
 
-        # Update ticket
+        # Update ticket status
         cursor.execute("""
             UPDATE tickets
             SET
                 status = %s,
                 updated_at = CURRENT_TIMESTAMP
             WHERE id = %s
-        """, (
-            new_status,
-            ticket_id
-        ))
+        """, (new_status, ticket_id))
 
-        # Add update history
+        # If rejecting, also save the rejection reason
+        if new_status == "Rejected" and notes:
+            cursor.execute("""
+                UPDATE tickets
+                SET rejection_reason = %s
+                WHERE id = %s
+            """, (notes, ticket_id))
+
+        # If fixing, also save the final diagnosis
+        if new_status == "Fixed" and notes:
+            cursor.execute("""
+                UPDATE tickets
+                SET final_diagnosis = %s
+                WHERE id = %s
+            """, (notes, ticket_id))
+
+        # Log to history
         cursor.execute("""
             INSERT INTO ticket_updates (
                 ticket_id,
@@ -240,16 +302,9 @@ def update_ticket_status(
                 notes
             )
             VALUES (%s, %s, %s, %s, %s)
-        """, (
-            ticket_id,
-            old_status,
-            new_status,
-            updated_by,
-            notes
-        ))
+        """, (ticket_id, old_status, new_status, updated_by, notes))
 
         conn.commit()
-
         return True
 
     except Exception as e:
@@ -275,13 +330,9 @@ def assign_ticket(ticket_id, technician_name):
                 assigned_to = %s,
                 updated_at = CURRENT_TIMESTAMP
             WHERE id = %s
-        """, (
-            technician_name,
-            ticket_id
-        ))
+        """, (technician_name, ticket_id))
 
         conn.commit()
-
         return True
 
     except Exception as e:
@@ -307,13 +358,9 @@ def add_final_diagnosis(ticket_id, diagnosis):
                 final_diagnosis = %s,
                 updated_at = CURRENT_TIMESTAMP
             WHERE id = %s
-        """, (
-            diagnosis,
-            ticket_id
-        ))
+        """, (diagnosis, ticket_id))
 
         conn.commit()
-
         return True
 
     except Exception as e:
@@ -332,17 +379,18 @@ def get_all_tickets():
     conn = get_connection()
     cursor = conn.cursor(cursor_factory=RealDictCursor)
 
-    cursor.execute("""
-        SELECT *
-        FROM tickets
-        ORDER BY id DESC
-    """)
+    try:
+        cursor.execute("""
+            SELECT * FROM tickets ORDER BY id DESC
+        """)
+        return cursor.fetchall()
 
-    rows = cursor.fetchall()
+    except Exception as e:
+        print("DB ERROR [get_all_tickets]:", e)
+        return []
 
-    conn.close()
-
-    return rows
+    finally:
+        conn.close()
 
 
 # =========================
@@ -353,18 +401,20 @@ def get_tickets_by_status(status):
     conn = get_connection()
     cursor = conn.cursor(cursor_factory=RealDictCursor)
 
-    cursor.execute("""
-        SELECT *
-        FROM tickets
-        WHERE status = %s
-        ORDER BY id DESC
-    """, (status,))
+    try:
+        cursor.execute("""
+            SELECT * FROM tickets
+            WHERE status = %s
+            ORDER BY id DESC
+        """, (status,))
+        return cursor.fetchall()
 
-    rows = cursor.fetchall()
+    except Exception as e:
+        print("DB ERROR [get_tickets_by_status]:", e)
+        return []
 
-    conn.close()
-
-    return rows
+    finally:
+        conn.close()
 
 
 # =========================
@@ -375,15 +425,17 @@ def get_ticket_history(ticket_id):
     conn = get_connection()
     cursor = conn.cursor(cursor_factory=RealDictCursor)
 
-    cursor.execute("""
-        SELECT *
-        FROM ticket_updates
-        WHERE ticket_id = %s
-        ORDER BY id ASC
-    """, (ticket_id,))
+    try:
+        cursor.execute("""
+            SELECT * FROM ticket_updates
+            WHERE ticket_id = %s
+            ORDER BY id ASC
+        """, (ticket_id,))
+        return cursor.fetchall()
 
-    rows = cursor.fetchall()
+    except Exception as e:
+        print("DB ERROR [get_ticket_history]:", e)
+        return []
 
-    conn.close()
-
-    return rows
+    finally:
+        conn.close()
